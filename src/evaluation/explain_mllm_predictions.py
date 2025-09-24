@@ -8,6 +8,8 @@ import pandas as pd
 import pickle
 import random
 import shap
+from evaluation.cc_shap import explain_vlm_with_patches
+from evaluation.cc_shap.metrics import compute_cc_shap
 import torch
 import traceback # For detailed error printing
 from scipy import spatial, stats, special
@@ -974,14 +976,14 @@ if __name__ == "__main__":
                 max_pred_tokens_for_shap = target_tokens.shape[1] # Use actual length for explanation consistency
                 target_tokens = target_tokens.to('cpu') # Move target tokens to CPU for SHAP
 
-            shap_values_pred, mm_score_pred, p_used, n_text_pred, explained_pred_ids = explain_mllm(
-                prompt=prediction_prompt,
+            shap_values_pred, mm_score_pred, p_used, n_text_pred, explained_pred_ids = explain_vlm_with_patches(
+                prompt_text=prediction_prompt,
                 raw_image=raw_image,
                 model_wrapper=model_wrapper,
-                max_new_tokens=max_pred_tokens_for_shap, # Max tokens for *generating* target if needed
-                target_output_ids=target_tokens,        # Actual tokens to explain
-                p=None, # Calculate p automatically first time
-                num_evals=args.shap_num_evals
+                target_output_ids=target_tokens,
+                p=None,
+                num_evals=args.shap_num_evals,
+                max_new_tokens=max_pred_tokens_for_shap,
             )
             current_results['mm_score_prediction'] = mm_score_pred
             current_results['num_patches_p'] = p_used
@@ -1001,14 +1003,14 @@ if __name__ == "__main__":
 
             num_image_placeholders = 1  # Use 1 for the new approach
 
-            shap_values_expl, mm_score_expl, _, n_text_expl, explained_expl_ids = explain_mllm(
-                prompt=explanation_prompt_text,
+            shap_values_expl, mm_score_expl, _, n_text_expl, explained_expl_ids = explain_vlm_with_patches(
+                prompt_text=explanation_prompt_text,
                 raw_image=raw_image,
                 model_wrapper=model_wrapper,
-                max_new_tokens=args.max_new_tokens_expl, # Max tokens for *generating* the explanation
-                target_output_ids=None,                 # Generate explanation dynamically
-                p=p_used, # Reuse p from prediction explanation
-                num_evals=args.shap_num_evals
+                target_output_ids=None,
+                p=p_used,
+                num_evals=args.shap_num_evals,
+                max_new_tokens=args.max_new_tokens_expl,
             )
             current_results['mm_score_explanation'] = mm_score_expl
             current_results['num_text_tokens_expl'] = n_text_expl
@@ -1035,12 +1037,11 @@ if __name__ == "__main__":
                 values_prediction=shap_values_pred,
                 values_explanation=shap_values_expl,
                 tokenizer=model_wrapper.tokenizer,
-                num_patches_p=p_used, # Pass p value used
+                num_patches_p=p_used,
                 num_text_tokens_pred=n_text_pred,
                 num_text_tokens_expl=n_text_expl,
                 marg_pred_str=marg_pred_str,
                 marg_expl_str=marg_expl_str,
-                model_family=args.model_family
             )
 
             # Store CC-SHAP results (lower distance/divergence = better consistency)

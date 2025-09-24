@@ -18,4 +18,18 @@ Results are in subdirectories of explanations/inseq/
 
 ---
 
-MLLM analysis using CC-SHAP currently not supported.
+### MLLM (CC‑SHAP)
+Models tested:
+* llava-hf/llava-v1.6-mistral-7b-hf
+
+Example for LogicNLG-Image with LLaVA (subset of 10):
+```bash
+python ./src/evaluation/explain_mllm_predictions.py \
+  --input_file logicnlg_image_results.json \
+  --model_id llava-hf/llava-v1.6-mistral-7b-hf \
+  --source_data_path data/LogicNLG/logicnlg_updated_2025-03-13 \
+  --subset_size 10 \
+  --shap_num_evals 600 \
+  --output_dir ./explanations/cc_shap
+```
+Results and optional overlays are saved in subdirectories of explanations/cc_shap/
