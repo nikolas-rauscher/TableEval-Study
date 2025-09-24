@@ -739,6 +739,8 @@ if __name__ == "__main__":
     parser.add_argument("--model_family", type=str, default="qwen", help="Specify model family ('qwen', 'llava', 'paligemma', 'generic').") # Changed default
     parser.add_argument("--output_dir", type=str, default="../../explanations/mm-shap")
     parser.add_argument("--subset_size", type=int, default=10, help="Number of examples to process.")
+    parser.add_argument("--patch_grid", type=int, default=None, help="Override patch grid size p used for image masking (p x p patches).")
+    parser.add_argument("--max_patch_grid", type=int, default=None, help="Upper bound for automatically inferred patch grid size.")
     parser.add_argument("--max_new_tokens_pred", type=int, default=50, help="Max new tokens for original prediction.")
     parser.add_argument("--max_new_tokens_expl", type=int, default=100, help="Max new tokens for explanation generation.")
     parser.add_argument("--shap_num_evals", type=int, default=None, help="Max evaluations for SHAP (default: 2*N+2048).")
@@ -999,6 +1001,8 @@ if __name__ == "__main__":
                 p=None,
                 num_evals=args.shap_num_evals,
                 max_new_tokens=max_pred_tokens_for_shap,
+                patch_grid=args.patch_grid,
+                max_patch_grid=args.max_patch_grid,
             )
             current_results['mm_score_prediction'] = mm_score_pred
             current_results['num_patches_p'] = p_used
@@ -1026,6 +1030,8 @@ if __name__ == "__main__":
                 p=p_used,
                 num_evals=args.shap_num_evals,
                 max_new_tokens=args.max_new_tokens_expl,
+                patch_grid=args.patch_grid,
+                max_patch_grid=args.max_patch_grid,
             )
             current_results['mm_score_explanation'] = mm_score_expl
             current_results['num_text_tokens_expl'] = n_text_expl
