@@ -30,6 +30,8 @@ python ./src/evaluation/explain_mllm_predictions.py \
   --source_data_path data/LogicNLG/logicnlg_updated_2025-03-13 \
   --subset_size 10 \
   --shap_num_evals 600 \
-  --output_dir ./explanations/cc_shap
+  --output_dir ./explanations/cc_shap \
+  --save_image_overlays \
+  --save_text_plots
 ```
 Results and optional overlays are saved in subdirectories of explanations/cc_shap/

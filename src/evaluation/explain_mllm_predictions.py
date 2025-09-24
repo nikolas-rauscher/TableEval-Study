@@ -10,6 +10,7 @@ import random
 import shap
 from evaluation.cc_shap import explain_vlm_with_patches
 from evaluation.cc_shap.metrics import compute_cc_shap
+from evaluation.cc_shap.visualize import image_patch_heatmap_overlay, save_text_contribution_plot
 import torch
 import traceback # For detailed error printing
 from scipy import spatial, stats, special
@@ -743,6 +744,9 @@ if __name__ == "__main__":
     parser.add_argument("--shap_num_evals", type=int, default=None, help="Max evaluations for SHAP (default: 2*N+2048).")
     parser.add_argument("--save_shap_values", action="store_true", help="Save detailed SHAP values (large files).")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--save_text_plots", action="store_true", help="Save token contribution plots (PNG).")
+    parser.add_argument("--save_image_overlays", action="store_true", help="Save image patch heatmap overlays (PNG).")
+    parser.add_argument("--overlay_dir", type=str, default=None, help="Optional custom directory for overlays; defaults to output_dir/overlays/<model>/<dataset>")
     args = parser.parse_args()
 
     # --- Set Seed ---
@@ -937,6 +941,17 @@ if __name__ == "__main__":
         "multi_modal_data": True,
     }
 
+    # --- Prepare overlay directories if needed ---
+    model_slug = args.model_id.replace('/', '_')
+    dataset_slug = os.path.basename(os.path.normpath(args.source_data_path))
+    overlay_root = args.overlay_dir or os.path.join(args.output_dir, "overlays", model_slug, dataset_slug)
+    overlay_img_dir = os.path.join(overlay_root, "images")
+    overlay_txt_dir = os.path.join(overlay_root, "text")
+    if args.save_image_overlays:
+        os.makedirs(overlay_img_dir, exist_ok=True)
+    if args.save_text_plots:
+        os.makedirs(overlay_txt_dir, exist_ok=True)
+
     # --- Main Processing Loop ---
     results_list = []
     for i, row in tqdm(merged_df.iterrows(), total=len(merged_df), desc="Calculating CC-SHAP"):
@@ -1060,6 +1075,21 @@ if __name__ == "__main__":
 
             print(f"Instance {instance_id} Results: MM-Pred={mm_score_pred:.3f}, MM-Expl={mm_score_expl:.3f}, "
                   f"CosineDist={current_results.get('cc_shap_cosine_distance', float('nan')):.3f}")
+
+            # 4. Optional overlays/plots
+            try:
+                if args.save_image_overlays:
+                    # Save prediction overlay
+                    pred_overlay = image_patch_heatmap_overlay(raw_image, shap_values_pred, p_used, alpha=0.45)
+                    pred_overlay.save(os.path.join(overlay_img_dir, f"{instance_id}_pred.png"))
+                    # Save explanation overlay
+                    expl_overlay = image_patch_heatmap_overlay(raw_image, shap_values_expl, p_used, alpha=0.45)
+                    expl_overlay.save(os.path.join(overlay_img_dir, f"{instance_id}_expl.png"))
+                if args.save_text_plots and isinstance(shap_plot_info, dict) and shap_plot_info.get('ratios_prediction'):
+                    title = f"Instance {instance_id} — Token Contributions"
+                    save_text_contribution_plot(shap_plot_info, os.path.join(overlay_txt_dir, f"{instance_id}_tokens.png"), title=title)
+            except Exception as e_vis:
+                print(f"Warning: Failed to save overlays/plots for {instance_id}: {e_vis}")
 
         except Exception as e:
             print(f"Error processing instance {instance_id}: {e}")
