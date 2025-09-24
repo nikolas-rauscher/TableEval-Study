@@ -1,4 +1,5 @@
 import math
+import time
 import numpy as np
 import torch
 from typing import Optional, Tuple, List
@@ -318,16 +319,38 @@ def explain_vlm_with_patches(
         pad_token_id=pad_id,
     )
 
-    # Wrap predictor to count evaluations
-    eval_counter = {'count': 0}
+    # Wrap predictor to count evaluations with time prediction
+    eval_counter = {'count': 0, 'start_time': None}
     
     def counting_predictor(*args, **kwargs):
+        if eval_counter['start_time'] is None:
+            eval_counter['start_time'] = time.time()
+        
         result = predictor(*args, **kwargs)
         eval_counter['count'] += 1
+        current_time = time.time()
         
-        # Update progress for every evaluation
+        # Update progress for every evaluation with time estimates
         progress = (eval_counter['count'] / num_evals) * 100
-        print(f"\rSHAP Progress: {eval_counter['count']}/{num_evals} ({progress:.1f}%)", end="", flush=True)
+        elapsed_time = current_time - eval_counter['start_time']
+        
+        if eval_counter['count'] > 5:  # More reliable estimate after a few evaluations
+            time_per_eval = elapsed_time / eval_counter['count']
+            remaining_evals = num_evals - eval_counter['count']
+            eta_seconds = remaining_evals * time_per_eval
+            
+            if eta_seconds > 3600:  # More than 1 hour
+                hours = int(eta_seconds // 3600)
+                minutes = int((eta_seconds % 3600) // 60)
+                eta_str = f"{hours}h {minutes}m"
+            elif eta_seconds > 60:  # More than 1 minute
+                eta_str = f"{int(eta_seconds//60)}m {int(eta_seconds%60)}s"
+            else:
+                eta_str = f"{int(eta_seconds)}s"
+            
+            print(f"\rSHAP Progress: {eval_counter['count']}/{num_evals} ({progress:.1f}%) - ETA: {eta_str}    ", end="", flush=True)
+        else:
+            print(f"\rSHAP Progress: {eval_counter['count']}/{num_evals} ({progress:.1f}%) - Calculating ETA...", end="", flush=True)
         
         return result
     
