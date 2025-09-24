@@ -3,6 +3,7 @@ import numpy as np
 import torch
 from typing import Optional, Tuple, List
 from PIL import Image
+from tqdm.auto import tqdm
 
 import shap
 
@@ -143,19 +144,36 @@ def _build_predictor(model,
                     # Recreate pixel_values with patches masked by zeros
                     if 'pixel_values' in original_vision_on_device:
                         pv = original_vision_on_device['pixel_values'].clone()
-                        # Mask patches in pv: pv shape [1, C, H, W]
-                        _, _, H, W = pv.shape
-                        # Infer p from num_patches
-                        p = int(round(math.sqrt(num_patches)))
-                        patch_h = H // p
-                        patch_w = W // p
-                        for k in range(num_patches):
-                            if current_x[0, k].item() == 0:
-                                m = k // p
-                                n = k % p
-                                h0, h1 = m * patch_h, (m + 1) * patch_h
-                                w0, w1 = n * patch_w, (n + 1) * patch_w
-                                pv[:, :, h0:h1, w0:w1] = 0
+
+                        original_shape = pv.shape
+                        if pv.ndim == 4:
+                            views = [pv]
+                            restore = lambda: pv
+                        elif pv.ndim == 5:
+                            num_images = pv.shape[1]
+                            views = [pv[:, img_idx] for img_idx in range(num_images)]
+                            restore = lambda: pv  # modifications already applied to pv
+                        else:
+                            pv_reshaped = pv.reshape(pv.shape[0], pv.shape[-3], pv.shape[-2], pv.shape[-1])
+                            views = [pv_reshaped]
+                            restore = lambda: pv_reshaped.reshape(original_shape)
+
+                        p_now = int(round(math.sqrt(num_patches)))
+                        for view in views:
+                            if view.ndim != 4:
+                                continue
+                            _, _, H, W = view.shape
+                            patch_h = H // p_now
+                            patch_w = W // p_now
+                            for k in range(num_patches):
+                                if current_x[0, k].item() == 0:
+                                    m = k // p_now
+                                    n = k % p_now
+                                    h0, h1 = m * patch_h, (m + 1) * patch_h
+                                    w0, w1 = n * patch_w, (n + 1) * patch_w
+                                    view[:, :, h0:h1, w0:w1] = 0
+
+                        pv = restore()
                         batch['pixel_values'] = pv
                     # Copy any other vision keys if present
                     for v_key, v_tensor in original_vision_on_device.items():
@@ -201,6 +219,8 @@ def explain_vlm_with_patches(
     p: Optional[int] = None,
     num_evals: Optional[int] = 600,
     max_new_tokens: int = 1,
+    patch_grid: Optional[int] = None,
+    max_patch_grid: Optional[int] = None,
 ):
     """Explain a VLM (HFModel) prediction using CC-SHAP-style patch masking.
 
@@ -229,8 +249,13 @@ def explain_vlm_with_patches(
     # Derive p from text length if not provided
     num_text_tokens = original_inputs_cpu['input_ids'].shape[1]
     if p is None:
-        # Heuristic from CC-SHAP: balance feature counts
-        p = max(1, int(math.ceil(math.sqrt(max(1, num_text_tokens - len(image_seq_ids))))))
+        if patch_grid is not None:
+            p = max(1, int(patch_grid))
+        else:
+            # Heuristic from CC-SHAP: balance feature counts
+            p = max(1, int(math.ceil(math.sqrt(max(1, num_text_tokens - len(image_seq_ids))))))
+            if max_patch_grid is not None:
+                p = min(p, max(1, int(max_patch_grid)))
     num_patches = p * p
 
     # Prepare target outputs: if not provided, generate with the model
@@ -253,6 +278,21 @@ def explain_vlm_with_patches(
     # Build feature vector X = [patch placeholders; input_ids]
     patch_placeholders = torch.arange(-1, -num_patches - 1, -1).unsqueeze(0)  # negative ids just as placeholders
     X = torch.cat((patch_placeholders, original_inputs_cpu['input_ids'].to('cpu')), dim=1)
+    num_features_total = X.shape[1]
+    min_evals_needed = 2 * num_features_total + 1
+    
+    if num_evals is None or num_evals < min_evals_needed:
+        new_evals = min_evals_needed
+        print(
+            f"[CC-SHAP] Feature count {num_features_total} requires at least {min_evals_needed} evaluations. "
+            f"Adjusting max_evals from {num_evals if num_evals is not None else 'None'} to {new_evals}."
+        )
+        num_evals = new_evals
+    elif num_evals == -1:  # Special flag to use exact minimum
+        num_evals = min_evals_needed
+        print(f"[CC-SHAP] Using exact minimum: {min_evals_needed} evaluations for {num_features_total} features.")
+    else:
+        print(f"[CC-SHAP] Feature count {num_features_total}, using max_evals={num_evals}.")
 
     # Special token ids
     bos_id = getattr(tokenizer, 'bos_token_id', None)
@@ -278,8 +318,23 @@ def explain_vlm_with_patches(
         pad_token_id=pad_id,
     )
 
-    explainer = shap.Explainer(predictor, masker)
+    # Wrap predictor to count evaluations
+    eval_counter = {'count': 0}
+    
+    def counting_predictor(*args, **kwargs):
+        result = predictor(*args, **kwargs)
+        eval_counter['count'] += 1
+        
+        # Update progress for every evaluation
+        progress = (eval_counter['count'] / num_evals) * 100
+        print(f"\rSHAP Progress: {eval_counter['count']}/{num_evals} ({progress:.1f}%)", end="", flush=True)
+        
+        return result
+    
+    print(f"Starting SHAP evaluation with {num_evals} evaluations...")
+    explainer = shap.Explainer(counting_predictor, masker, silent=False)
     shap_values = explainer(X, max_evals=num_evals)
+    print(f"\nSHAP evaluation completed! ({eval_counter['count']} evaluations used)")
 
     # Normalize SHAP values shape to (1, num_features, num_output_tokens)
     if hasattr(shap_values, 'values') and isinstance(shap_values.values, np.ndarray):
