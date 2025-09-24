@@ -850,6 +850,8 @@ if __name__ == "__main__":
         from evaluation.tasks.ComTQA.pubmed.image_parser import parse as parse_func
     elif "LogicNLG" in args.source_data_path:
         from evaluation.tasks.LogicNLG.image_parser import parse as parse_func
+    elif "numericNLG" in args.source_data_path:
+        from evaluation.tasks.numericNLG.image_parser import parse as parse_func
     else:
         print(f"Warning: Unknown dataset path '{args.source_data_path}'. Using default/dummy parser logic if available.")
         # Provide a dummy parser or raise error if no default
