@@ -1,0 +1,20 @@
+task_name: image_numericnlg_debug
+path: ${TABLEEVAL_DATA_ROOT}/numericNLG/debug_subset
+test_split: test
+validation_split: validation
+train_split: train
+num_fewshot: 0
+save_columns: instance_id,table_id_paper,table_id,paper_id,image_id
+instruction: ""
+doc_to_text: !function image_parser.parse
+doc_to_target: description
+multi_modal_data: True
+metric_list:
+  - sacrebleu
+  - moverS
+  - meteor
+  - bertS
+  - bleu1
+  - bleu2
+  - rougeL
+  - rouge1
