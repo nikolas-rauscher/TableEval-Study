@@ -3,6 +3,8 @@ from datasets.packaged_modules import text
 from jinja2 import Template
 from datasets import Dataset, load_dataset, load_from_disk
 import os
+from pathlib import Path
+from typing import Optional
 import json
 import random
 import copy
@@ -12,15 +14,38 @@ from io import BytesIO
 import numpy as np
 
 
-def load_samples(path: str, split: str) -> Dataset:
-    """Load the dataset from a HF source. either from a local source or from
-    the Hub."""
-    if os.path.exists(path):
-        dataset = load_from_disk(path)
-        dataset = dataset[split]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
+
+def _resolve_local_path(path_str: str) -> Optional[Path]:
+    expanded = os.path.expandvars(os.path.expanduser(path_str))
+    candidate = Path(expanded)
+
+    search_paths = []
+    if candidate.is_absolute():
+        search_paths.append(candidate)
     else:
-        dataset = load_dataset(path, split=f"{split}")
+        search_paths.extend([
+            Path.cwd() / candidate,
+            PROJECT_ROOT / candidate,
+        ])
+
+    for option in search_paths:
+        if option.exists():
+            return option
+    return None
+
+
+def load_samples(path: str, split: str) -> Dataset:
+    """Load the dataset from a HF source, supporting env vars and paths relative to repo root."""
+    expanded = os.path.expandvars(os.path.expanduser(path))
+    local_path = _resolve_local_path(path)
+
+    if local_path is not None and local_path.exists():
+        dataset = load_from_disk(str(local_path))
+        dataset = dataset[split]
+    else:
+        dataset = load_dataset(expanded, split=f"{split}")
     return dataset
 
 
