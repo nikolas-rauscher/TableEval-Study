@@ -51,7 +51,14 @@ for data_file, dataset_dir, image_zip, image_dir in SPECS:
         image_path.mkdir(parents=True, exist_ok=True)
         zip_path = hf_hub_download(DATASET_ID, filename=image_zip, repo_type="dataset")
         with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(image_path)
+            # Extract and flatten: move files from nested folder to image_path
+            for member in zf.namelist():
+                if member.endswith('.png'):
+                    filename = Path(member).name
+                    source = zf.open(member)
+                    target = image_path / filename
+                    with open(target, 'wb') as f:
+                        f.write(source.read())
 PY
 
 cat <<EOF >"${ROOT_DIR}/env.sh"

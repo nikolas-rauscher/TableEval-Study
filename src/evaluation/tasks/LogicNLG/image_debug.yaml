@@ -1,7 +1,6 @@
 task_name: image_logicnlg_debug
 path: ${TABLEEVAL_DATA_ROOT}/LogicNLG/debug_subset
-test_split: test
-validation_split: validation
+test_split: train
 train_split: train
 num_fewshot: 0
 save_columns: instance_id,image_name,filename,table_id,title
