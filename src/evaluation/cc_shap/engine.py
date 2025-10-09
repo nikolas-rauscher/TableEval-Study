@@ -235,6 +235,7 @@ def explain_vlm_with_patches(
 
     # Build original inputs once
     full_prompt = image_token_text + prompt_text
+
     original_inputs_cpu = processor(
         text=full_prompt,
         images=raw_image,
@@ -280,6 +281,7 @@ def explain_vlm_with_patches(
     patch_placeholders = torch.arange(-1, -num_patches - 1, -1).unsqueeze(0)  # negative ids just as placeholders
     X = torch.cat((patch_placeholders, original_inputs_cpu['input_ids'].to('cpu')), dim=1)
     num_features_total = X.shape[1]
+
     min_evals_needed = 2 * num_features_total + 1
     
     if num_evals is None or num_evals < min_evals_needed:
@@ -320,23 +322,42 @@ def explain_vlm_with_patches(
     )
 
     # Wrap predictor to count evaluations with time prediction
-    eval_counter = {'count': 0, 'start_time': None}
+    eval_counter = {'batches': 0, 'evals': 0, 'start_time': None}
     
     def counting_predictor(*args, **kwargs):
         if eval_counter['start_time'] is None:
             eval_counter['start_time'] = time.time()
         
         result = predictor(*args, **kwargs)
-        eval_counter['count'] += 1
+        eval_counter['batches'] += 1
+
+        maybe_x = None
+        if args:
+            maybe_x = args[0]
+        elif 'x' in kwargs:
+            maybe_x = kwargs['x']
+
+        batch_size = 1
+        if maybe_x is not None:
+            if isinstance(maybe_x, np.ndarray):
+                batch_size = maybe_x.shape[0] if maybe_x.ndim > 1 else 1
+            elif torch.is_tensor(maybe_x):
+                batch_size = maybe_x.shape[0] if maybe_x.ndim > 1 else 1
+
+        if isinstance(result, np.ndarray):
+            result_batch = result.shape[0] if result.ndim > 0 else 1
+            batch_size = max(batch_size, result_batch)
+
+        eval_counter['evals'] += batch_size
         current_time = time.time()
         
         # Update progress for every evaluation with time estimates
-        progress = (eval_counter['count'] / num_evals) * 100
         elapsed_time = current_time - eval_counter['start_time']
+        progress = min(100.0, (eval_counter['evals'] / num_evals) * 100) if num_evals else 100.0
         
-        if eval_counter['count'] > 5:  # More reliable estimate after a few evaluations
-            time_per_eval = elapsed_time / eval_counter['count']
-            remaining_evals = num_evals - eval_counter['count']
+        if eval_counter['evals'] > 5:  # More reliable estimate after a few evaluations
+            time_per_eval = elapsed_time / max(eval_counter['evals'], 1)
+            remaining_evals = max(num_evals - eval_counter['evals'], 0)
             eta_seconds = remaining_evals * time_per_eval
             
             if eta_seconds > 3600:  # More than 1 hour
@@ -348,16 +369,16 @@ def explain_vlm_with_patches(
             else:
                 eta_str = f"{int(eta_seconds)}s"
             
-            print(f"\rSHAP Progress: {eval_counter['count']}/{num_evals} ({progress:.1f}%) - ETA: {eta_str}    ", end="", flush=True)
+            print(f"\rSHAP Progress: {eval_counter['evals']}/{num_evals} ({progress:.1f}%) - ETA: {eta_str}    ", end="", flush=True)
         else:
-            print(f"\rSHAP Progress: {eval_counter['count']}/{num_evals} ({progress:.1f}%) - Calculating ETA...", end="", flush=True)
+            print(f"\rSHAP Progress: {eval_counter['evals']}/{num_evals} ({progress:.1f}%) - Calculating ETA...", end="", flush=True)
         
         return result
     
     print(f"Starting SHAP evaluation with {num_evals} evaluations...")
     explainer = shap.Explainer(counting_predictor, masker, silent=False)
     shap_values = explainer(X, max_evals=num_evals)
-    print(f"\nSHAP evaluation completed! ({eval_counter['count']} evaluations used)")
+    print(f"\nSHAP evaluation completed! ({eval_counter['evals']} evaluations used)")
 
     # Normalize SHAP values shape to (1, num_features, num_output_tokens)
     if hasattr(shap_values, 'values') and isinstance(shap_values.values, np.ndarray):
@@ -384,7 +405,8 @@ def explain_vlm_with_patches(
 
 
 def compute_mm_score(num_text_tokens: int, shap_values) -> float:
-    """Compute Multimodality Score = text_contrib / (image + text contrib)."""
+    """Compute Multimodality Score = text_contrib / (image + text contrib). Uses 0.5 as fallback
+    """
     if not hasattr(shap_values, 'values') or not isinstance(shap_values.values, np.ndarray):
         return 0.5
     vals = shap_values.values
