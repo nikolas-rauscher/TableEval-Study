@@ -1,9 +1,19 @@
+import os
+from pathlib import Path
 from PIL import Image
 
-def parse(samples, image_path='/netscratch/user/TableEval/data/ComTQA_data/comtqa_fin_updated_2025-03-13'):
+
+def _default_image_dir() -> Path:
+    project_root = Path(__file__).resolve().parents[4]
+    base = os.environ.get("TABLEEVAL_DATA_ROOT", project_root / "data")
+    return Path(base) / "ComTQA" / "FinTabNet" / "images"
+
+
+def parse(samples, image_path=None):
+    image_dir = Path(image_path) if image_path else _default_image_dir()
     inputs = []
     for sample in samples:
-        with Image.open(f'{image_path}/{sample["image_name"]}') as image:
+        with Image.open(image_dir / sample["image_name"]) as image:
             image = image.convert("RGB")
             #  min_size = 28
             #  new_width = max(image.width, min_size)

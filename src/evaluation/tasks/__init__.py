@@ -9,8 +9,11 @@ TaskConfig = Dict[str, str]
 
 class TaskManager:
     def __init__(self, task_path: str = "./") -> None:
-        yaml.add_constructor("!function", self.import_function)
-        self.task_path = task_path
+        yaml.add_constructor("!function", self.import_function, Loader=yaml.FullLoader)
+        if task_path == "./":
+            self.task_path = os.path.dirname(os.path.abspath(__file__))
+        else:
+            self.task_path = task_path
         self.tasks: Dict[str, TaskConfig] = {}
         self._init_all_tasks()
         self.task_list = list(self.tasks.keys())
@@ -54,7 +57,7 @@ class TaskManager:
     def _init_task(self, root_path: str, file_name: str) -> Optional[TaskConfig]:
         with open(f"{root_path}/{file_name}") as f:
             try:
-                output_file = yaml.full_load(f)
+                output_file = yaml.load(f, Loader=yaml.FullLoader)
                 return output_file
             except yaml.YAMLError as exc:
                 print(exc)
