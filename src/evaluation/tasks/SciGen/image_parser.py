@@ -26,11 +26,5 @@ def parse(samples, image_root: str | Path | None = None):
         file_path = dirs[dir_key] / sample["image_id"]
         with Image.open(file_path) as image:
             image = image.convert("RGB")
-            prompt = (
-                "Describe the given table focusing on the most important findings "
-                "reported by reasoning over its content. The summary must be factual, "
-                "coherent, and well-written. Do not introduce new information or "
-                f"speculate. Table caption: {sample['table_caption']}"
-            )
-            inputs.append([image.copy(), prompt])
-    return inputs
+            inputs.append([image.copy(), f'Describe the given table focusing on the most important findings reported by reasoning over its content. The summary must be factual, coherent, and well-written. Do not introduce new information or speculate. Table caption: {sample["table_caption"]}'])
+    return  inputs
