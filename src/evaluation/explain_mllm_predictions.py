@@ -846,7 +846,7 @@ if __name__ == "__main__":
     # Simplified parser selection logic
     if "ComTQA_data/fintabnet" in args.source_data_path:
         from evaluation.tasks.ComTQA.fintabnet.image_parser import parse as parse_func
-    elif "ComTQA_data/pubmed" in args.source_data_path:
+    elif "ComTQA_data/pubmed" in args.source_data_path or "ComTQA/PubTab1M" in args.source_data_path:
         from evaluation.tasks.ComTQA.pubmed.image_parser import parse as parse_func
     elif "LogicNLG" in args.source_data_path:
         from evaluation.tasks.LogicNLG.image_parser import parse as parse_func
