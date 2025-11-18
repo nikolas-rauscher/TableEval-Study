@@ -216,6 +216,7 @@ def explain_vlm_with_patches(
     prompt_text: str,
     raw_image: Image.Image,
     model_wrapper,
+    use_chat_template = None,
     target_output_ids: Optional[torch.Tensor] = None,
     p: Optional[int] = None,
     num_evals: Optional[int] = 600,
@@ -234,10 +235,17 @@ def explain_vlm_with_patches(
     image_token_text = model_wrapper.image_token
 
     # Build original inputs once
-    full_prompt = image_token_text + prompt_text
-
+    if use_chat_template:
+        #let processor handle text formatting
+        full_prompt = model_wrapper.processor.apply_chat_template(prompt_text,
+                                                                  add_generation_prompt=True,                                                          
+                                                                  return_tensors=None,)
+    else: 
+        #prepend image token manually
+        full_prompt = image_token_text + prompt_text
+                                                                                                            
     original_inputs_cpu = processor(
-        text=full_prompt,
+        text = full_prompt,
         images=raw_image,
         return_tensors='pt',
         padding=True,

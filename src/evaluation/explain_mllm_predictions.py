@@ -682,11 +682,11 @@ def explain_mllm(prompt, raw_image, model_wrapper: HFModel,
 
 # --- Prompting Functions ---
 
-def create_prediction_prompt(sample, task):
+def create_prediction_prompt(sample, task, prompt_template):
     """ Creates the initial prompt for prediction using generate_prompt """
     # Use the lambda that returns [image, text] for multi-modal
     prompt_pair = generate_prompt(
-        [sample], few_shot_samples=[], num_fewshot=0, task=task, prompt_template=False)[0]
+        [sample], few_shot_samples=[], num_fewshot=0, task=task, prompt_template=prompt_template)[0]
     if not isinstance(prompt_pair, (list, tuple)) or len(prompt_pair) != 2:
         raise ValueError(f"generate_prompt returned unexpected format: {prompt_pair}")
     return prompt_pair[1] # Return only the text part
@@ -731,10 +731,11 @@ def serialize_shap(shap_expl):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--input_file", type=str, required=True, help="Input JSON file with 'example', 'prediction' fields.")
+    parser.add_argument("--input_file", type=str, required=True, help="Input JSON file for final predictions with 'example', 'prediction' fields.")
+    parser.add_argument("--expl_file", type=str, required=True, help="Input JSON file for explaiantions with 'example', 'prediction' fields.")
     parser.add_argument("--source_data_path", type=str, default="../../data/ComTQA_data/comtqa_pmc_updated_2025-03-07")
     parser.add_argument("--image_path", type=str, default="../../data/ComTQA_data/pubmed/images/png")
-    # parser.add_argument("--model_id", type=str, default="google/paligemma-3b-mix-224")
+    parser.add_argument("--use_chat_template", action="store_true")
     parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-VL-3B-Instruct", help="The model to use.") # Changed default
     parser.add_argument("--model_family", type=str, default="qwen", help="Specify model family ('qwen', 'llava', 'paligemma', 'generic').") # Changed default
     parser.add_argument("--output_dir", type=str, default="../../explanations/mm-shap")
@@ -844,10 +845,12 @@ if __name__ == "__main__":
     # --- Select Image Parser ---
     print("Selecting image parser...")
     # Simplified parser selection logic
+    # TO DO: import correct parsers, currently implemented for pubmed only
     if "ComTQA_data/fintabnet" in args.source_data_path:
         from evaluation.tasks.ComTQA.fintabnet.image_parser import parse as parse_func
     elif "ComTQA_data/pubmed" in args.source_data_path or "ComTQA/PubTab1M" in args.source_data_path:
-        from evaluation.tasks.ComTQA.pubmed.image_parser import parse as parse_func
+        from evaluation.tasks.ComTQA.pubmed.image_parser_expl import parse_expl
+        from evaluation.tasks.ComTQA.pubmed.image_parser_pred import parse_pred
     elif "LogicNLG" in args.source_data_path:
         from evaluation.tasks.LogicNLG.image_parser import parse as parse_func
     elif "numericNLG" in args.source_data_path:
@@ -866,12 +869,17 @@ if __name__ == "__main__":
     print("Parsing images...")
     try:
         # Convert dataframe rows to list of records for parser
-        records = merged_df.to_dict('records')
-        parsed_data = parse_func(records, image_path=args.image_path) # Pass records
-        if len(parsed_data) != len(merged_df):
-            raise ValueError(f"Parser returned {len(parsed_data)} items, expected {len(merged_df)}")
-        merged_df['parsed_image_obj'] = [item[0] for item in parsed_data]
-        merged_df['parsed_text_prompt'] = [item[1] for item in parsed_data]
+        records = merged_df.to_dict('records') 
+        parsed_data_expl = parse_expl(records)
+        parsed_data_pred = parse_pred(records, reasoning_path = args.expl_file)
+        
+        if len(parsed_data_expl) != len(merged_df) or len(parsed_data_pred) != len(merged_df):
+            raise ValueError(f"Parser returned {len(parsed_data_expl)} expl items and {len(parsed_data_pred)} pred items , expected {len(merged_df)}")
+        
+        merged_df['parsed_image_obj'] = [item[0] for item in parsed_data_pred]
+        merged_df['parsed_expl_prompt'] = [item[1] for item in parsed_data_expl]
+        merged_df['parsed_pred_prompt'] = [item[1] for item in parsed_data_pred]
+    
     except Exception as e:
         print(f"Error parsing images: {e}")
         traceback.print_exc()
@@ -881,10 +889,12 @@ if __name__ == "__main__":
     # --- Sort and Subsample ---
     def compute_sort_key(row):
         raw_image = row['parsed_image_obj']
-        prompt = row['parsed_text_prompt']
-        prompt_length = len(prompt) if isinstance(prompt, str) else 0
+        pred_prompt = row['parsed_pred_prompt']
+        expl_prompt = row['parsed_expl_prompt'] 
+        pred_len = len(pred_prompt) if isinstance(pred_prompt, str) else 0
+        expl_len = len(expl_prompt) if isinstance(expl_prompt, str) else 0
         pixel_count = raw_image.size[0] * raw_image.size[1] if isinstance(raw_image, Image.Image) else 0
-        return prompt_length + pixel_count
+        return pred_len + expl_len + pixel_count
 
     merged_df["sort_key"] = merged_df.apply(compute_sort_key, axis=1)
     merged_df = merged_df.sort_values("sort_key", ascending=True)
@@ -909,6 +919,7 @@ if __name__ == "__main__":
             multi_modal=True,
             device=device,
         )
+
         # Ensure processor and tokenizer are loaded
         if not hasattr(model_wrapper, 'processor') or model_wrapper.processor is None:
              raise AttributeError("HFModel failed to load processor.")
@@ -928,7 +939,8 @@ if __name__ == "__main__":
         if hasattr(model_wrapper.model.config, "pad_token_id") and model_wrapper.model.config.pad_token_id is None:
              model_wrapper.model.config.pad_token_id = model_wrapper.tokenizer.pad_token_id
              print(f"Set model.config.pad_token_id to: {model_wrapper.model.config.pad_token_id}")
-
+        
+        print("Prepared model wrapper")
 
     except Exception as e_load:
          print(f"FATAL: Failed to load model {args.model_id}: {e_load}")
@@ -936,10 +948,19 @@ if __name__ == "__main__":
          exit(1)
 
 
-    # --- Prepare Task Dictionary for generate_prompt ---
-    minimal_task = {
+    # --- Prepare Task Dictionary for generate_prompt --- 
+
+    minimal_task_pred = {
         "doc_to_text": lambda docs: [ # Lambda processes list of docs
-            [doc.get('parsed_image_obj'), doc.get('parsed_text_prompt', '')]
+            [doc.get('parsed_image_obj'), doc.get('parsed_pred_prompt', '')]
+            for doc in docs
+        ],
+        "multi_modal_data": True,
+    }
+
+    minimal_task_expl= {
+        "doc_to_text": lambda docs: [ # Lambda processes list of docs
+            [doc.get('parsed_image_obj'), doc.get('parsed_expl_prompt', '')]
             for doc in docs
         ],
         "multi_modal_data": True,
@@ -973,12 +994,12 @@ if __name__ == "__main__":
         try:
             # 0. Create Prediction Prompt
             print("Creating prediction prompt...")
-            if 'parsed_text_prompt' not in sample_dict or not isinstance(sample_dict['parsed_text_prompt'], str):
-                 raise ValueError("'parsed_text_prompt' missing or not a string in sample_dict")
+            if 'parsed_pred_prompt' not in sample_dict or not isinstance(sample_dict['parsed_pred_prompt'], str):
+                 raise ValueError("'parsed_pred_prompt' missing or not a string in sample_dict")
             if 'parsed_image_obj' not in sample_dict or not isinstance(sample_dict['parsed_image_obj'], Image.Image):
                  raise ValueError("'parsed_image_obj' missing or not an Image in sample_dict")
 
-            prediction_prompt = create_prediction_prompt(sample_dict, minimal_task)
+            prediction_prompt = create_prediction_prompt(sample_dict, minimal_task_pred, args.use_chat_template) #if MM requites chat format, pass use_chat_template arg
             original_prediction_text = row['prediction']
 
             # 1. Explain the Original Prediction
@@ -999,6 +1020,7 @@ if __name__ == "__main__":
                 prompt_text=prediction_prompt,
                 raw_image=raw_image,
                 model_wrapper=model_wrapper,
+                use_chat_template=args.use_chat_template,
                 target_output_ids=target_tokens,
                 p=None,
                 num_evals=args.shap_num_evals,
@@ -1020,7 +1042,11 @@ if __name__ == "__main__":
 
             # 2. Explain the Explanation Task
             print("Explaining the explanation task...")
-            explanation_prompt_text = create_explanation_prompt(prediction_prompt, original_prediction_text, args.model_family)
+            
+            if 'parsed_expl_prompt' not in sample_dict or not isinstance(sample_dict['parsed_expl_prompt'], str):
+                 raise ValueError("'parsed_expl_prompt' missing or not a string in sample_dict")
+            
+            explanation_prompt_text = create_prediction_prompt(sample_dict, minimal_task_expl, args.use_chat_template) #if MM requites chat format, pass use_chat_template arg
 
             num_image_placeholders = 1  # Use 1 for the new approach
 
@@ -1028,6 +1054,7 @@ if __name__ == "__main__":
                 prompt_text=explanation_prompt_text,
                 raw_image=raw_image,
                 model_wrapper=model_wrapper,
+                use_chat_template=args.use_chat_template,
                 target_output_ids=None,
                 p=p_used,
                 num_evals=args.shap_num_evals,
@@ -1048,13 +1075,13 @@ if __name__ == "__main__":
 
             # 3. Compute CC-SHAP Scores
             print("Computing CC-SHAP scores...")
-            marg_pred_str = "" # Assume no marginalization for prediction task output
+            marg_pred_str = "" # TO DO: Assume no marginalization for prediction task output
             # Define marginalization string for explanation task output based on prompt structure
             # This should match the end of the explanation prompt *before* the model starts generating
             # If create_explanation_prompt ends with "...ASSISTANT:", this might be empty ""
             # If it includes the question "Why did you ... step.\nASSISTANT:", marginalize that.
             # Adjust based on actual prompt structure used for explanation SHAP run
-            marg_expl_str = " Why did you generate the previous response? Please explain your reasoning step by step.\nASSISTANT:" # Match create_explanation_prompt
+            marg_expl_str = " Why did you generate the previous response? Please explain your reasoning step by step.\nASSISTANT:" # TO DO: Match create_explanation_prompt
 
             cosine_dist, dist_correl, mse, var_diff, kl_div, js_div, shap_plot_info = compute_cc_shap(
                 values_prediction=shap_values_pred,
